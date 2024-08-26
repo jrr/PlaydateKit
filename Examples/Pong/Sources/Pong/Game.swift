@@ -1,5 +1,20 @@
 import PlaydateKit
 
+// MARK: - GameConstants
+
+enum GameConstants {
+    static let initialBallDirection = degreesToRadians(-30)
+    static let initialBallSpeed = sqrtf(4 * 4 + 5 * 5)
+
+    static let cpuPaddleSpeed: Float = 3.5
+
+    /// When using the d-pad, the player's paddle moves this fast
+    static let playerPaddleSpeed: Float = 4.5
+
+    /// When predicting the path of the ball, the CPU adds a random error within the range of `[-n, n]`.
+    static let cpuAngleError = degreesToRadians(6)
+}
+
 // MARK: - Game
 
 final class Game: PlaydateGame {
@@ -91,6 +106,22 @@ class Wall: Sprite.Sprite {
 
 typealias Vector = Point
 
+func vectorToRadians(_ vector: Vector) -> Float {
+    atan2f(vector.y, vector.x)
+}
+
+func radiansToUnitVector(_ radians: Float) -> Vector {
+    Vector(x: cosf(radians), y: sinf(radians))
+}
+
+func degreesToRadians(_ degrees: Float) -> Float {
+    degrees * Float.pi / 180.0
+}
+
+func radiansToDegrees(_ radians: Float) -> Float {
+    radians * 180.0 / Float.pi
+}
+
 // MARK: - Ball
 
 class Ball: Sprite.Sprite {
@@ -100,35 +131,32 @@ class Ball: Sprite.Sprite {
         super.init()
         bounds = .init(x: 0, y: 0, width: 8, height: 8)
         collideRect = bounds
+        velocity = radiansToUnitVector(GameConstants.initialBallDirection) * GameConstants.initialBallSpeed
     }
 
     // MARK: Internal
 
-    var velocity = Vector(x: 4, y: 5)
+    var velocity = Vector(x: 0, y: 0)
+    var bounceCount = 0
 
     static func computeNewVelocity(collisionPoint: Float, speed: Float, direction: Bool) -> Vector {
         // Maximum and minimum angle from vertical
-        let maxAngleDegrees = 20
+        let minReturnAngle = degreesToRadians(20)
+        let returnAngleRange = Float.pi - 2 * minReturnAngle
+        let selectedReturnBearing = Float.pi / 2 - minReturnAngle - collisionPoint * returnAngleRange
 
-        let bounceDegrees = Float(180 - 2 * maxAngleDegrees) * collisionPoint + Float(maxAngleDegrees)
-
-        let bounceRadians = bounceDegrees * Float.pi / 180
-
-        let unitVectorX = sinf(bounceRadians)
-        let unitVectorY = cosf(bounceRadians)
+        let unitVector = radiansToUnitVector(selectedReturnBearing)
 
         let flip: Float = direction ? -1 : 1
 
-        let velocityX = speed * unitVectorX * flip
-        let velocityY = speed * unitVectorY
-
-        return Vector(x: velocityX, y: velocityY)
+        return Vector(x: speed * unitVector.x * flip, y: speed * unitVector.y)
     }
 
     func reset() {
         position = Point(x: Display.width / 2, y: 10)
         velocity.x *= Bool.random() ? 1 : -1
         velocity.y = abs(velocity.y)
+        bounceCount = 0
     }
 
     func speed() -> Float {
@@ -158,6 +186,7 @@ class Ball: Sprite.Sprite {
                 if collision.normal.y != 0 {
                     velocity.y *= -1
                 }
+                bounceCount += 1
             }
         }
     }
@@ -169,6 +198,20 @@ class Ball: Sprite.Sprite {
 
     override func draw(bounds: Rect, drawRect _: Rect) {
         Graphics.fillEllipse(in: bounds)
+    }
+
+    func interceptX(x: Int, angleError: Float) -> Int {
+        let deltaX = abs(Float(x) - position.x)
+
+        let bearing = vectorToRadians(velocity) + angleError
+
+        let slope = radiansToUnitVector(bearing)
+
+        let timeToIntercept = deltaX / slope.x
+
+        let yAxisIntercept = Int(position.y + slope.y * timeToIntercept)
+
+        return clampToRange(n: yAxisIntercept, range: (0, Display.height))
     }
 
     // MARK: Private
@@ -187,29 +230,47 @@ class Ball: Sprite.Sprite {
 // MARK: - ComputerPaddle
 
 class ComputerPaddle: Paddle {
-    override func update() {
-        let ball = game.ball
-        let paddleCenter = position.y + bounds.height / 2
-        let ballCenter = ball.position.y + ball.bounds.height / 2
+    // MARK: Public
 
-        if ballCenter < paddleCenter - 5 {
-            // Ball is above the paddle center
-            moveWithCollisions(
-                goal: position - Vector(x: 0, y: speed)
-            )
-        } else if ballCenter > paddleCenter + 5 {
-            // Ball is below the paddle center
-            moveWithCollisions(
-                goal: position + Vector(x: 0, y: speed)
-            )
+    public var targetInterceptY: Int = 0
+
+    // MARK: Internal
+
+    override func update() {
+        let ballGoingRight = game.ball.velocity.x > 0
+
+        let bounceCount = game.ball.bounceCount
+
+        if !ballGoingRight {
+            // slowly return to center
+            let distanceToGoal = Float(Display.height / 2) - position.y
+            let movement = clampToRange(n: distanceToGoal, range: (-speed / 2, speed / 2))
+            moveWithCollisions(goal: position + Vector(x: 0, y: movement))
+            return
         }
-        // If the ball is within 5 pixels of the paddle center, don't move
+        if bounceCount == 0 || bounceCount != lastBounceCount {
+            lastBounceCount = bounceCount
+            let randomAngleError = Float.random(in: -GameConstants.cpuAngleError...GameConstants.cpuAngleError)
+//            System.log("Adding error of \(radiansToDegrees(radians: randomAngleError)) degrees")
+            targetInterceptY = game.ball.interceptX(x: Int(position.x), angleError: randomAngleError)
+        }
+
+        let distanceToGoal = Float(targetInterceptY) - position.y
+        let movement = clampToRange(n: distanceToGoal, range: (-speed, speed))
+        moveWithCollisions(goal: position + Vector(x: 0, y: movement))
     }
+
+    // MARK: Private
+
+    private var lastBounceCount = -1
+    private var speed = GameConstants.cpuPaddleSpeed
 }
 
 // MARK: - PlayerPaddle
 
 class PlayerPaddle: Paddle {
+    // MARK: Internal
+
     override func update() {
         if System.isCrankDocked {
             if System.buttonState.current.contains(.down) {
@@ -229,6 +290,10 @@ class PlayerPaddle: Paddle {
             moveWithCollisions(goal: Point(x: position.x, y: targetY))
         }
     }
+
+    // MARK: Private
+
+    private var speed = GameConstants.playerPaddleSpeed
 }
 
 // MARK: - Paddle
@@ -244,9 +309,15 @@ class Paddle: Sprite.Sprite {
 
     // MARK: Internal
 
-    let speed: Float = 4.5
-
     override func draw(bounds: Rect, drawRect _: Rect) {
         Graphics.fillRect(bounds)
     }
+}
+
+func clampToRange<T: Comparable>(n: T, range: (T, T)) -> T {
+    let (low, high) = range
+    assert(low <= high)
+    let a = max(n, low)
+    let b = min(a, high)
+    return b
 }
