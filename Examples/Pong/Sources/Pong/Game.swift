@@ -122,6 +122,16 @@ func radiansToDegrees(_ radians: Float) -> Float {
     radians * 180.0 / Float.pi
 }
 
+func normalizeVector(v: Vector) -> Vector {
+    let len = sqrtf(v.x * v.x + v.y * v.y)
+
+    if len == 0 {
+        return Vector(x: 0, y: 0)
+    }
+
+    return Vector(x: v.x / len, y: v.y / len)
+}
+
 // MARK: - Ball
 
 class Ball: Sprite.Sprite {
@@ -152,10 +162,39 @@ class Ball: Sprite.Sprite {
         return Vector(x: speed * unitVector.x * flip, y: speed * unitVector.y)
     }
 
+    static func newGameVelocity(_ oldVelocity: Vector) -> Vector {
+        // take the old velocity, and:
+        //  - ensure y component is pointed downward (since the ball lauches from the top of the screen)
+        //  - randomly point the x component left or right
+        //  - normalize it, and apply the initial speed. (speed doesn't vary yet, but may in the future)
+        //  - if the y component is faster than paddles can move, slow it a bit
+
+        let candidateDirection = Vector(x: oldVelocity.x * (Bool.random() ? 1 : -1), y: abs(oldVelocity.y))
+        let candidateVelocity = normalizeVector(v: candidateDirection) * GameConstants.initialBallSpeed
+
+        let fasterThanPaddle = candidateVelocity.y > min(GameConstants.cpuPaddleSpeed, GameConstants.playerPaddleSpeed)
+        if fasterThanPaddle {
+            let shallower = Vector(x: candidateVelocity.x, y: min(GameConstants.cpuPaddleSpeed, GameConstants.playerPaddleSpeed) - 1)
+            return normalizeVector(v: shallower) * GameConstants.initialBallSpeed
+        }
+        return candidateVelocity
+    }
+
+    func isMovingToward(_ targetPositionX: Float) -> Bool {
+        let ballPostionX = position.x
+        let ballVelocityX = velocity.x
+        if ballPostionX < targetPositionX, ballVelocityX > 0 {
+            return true
+        }
+        if ballPostionX > targetPositionX, ballVelocityX < 0 {
+            return true
+        }
+        return false
+    }
+
     func reset() {
         position = Point(x: Display.width / 2, y: 10)
-        velocity.x *= Bool.random() ? 1 : -1
-        velocity.y = abs(velocity.y)
+        velocity = Ball.newGameVelocity(velocity)
         bounceCount = 0
     }
 
@@ -237,17 +276,18 @@ class ComputerPaddle: Paddle {
     // MARK: Internal
 
     override func update() {
-        let ballGoingRight = game.ball.velocity.x > 0
+        let ballApproaching = game.ball.isMovingToward(position.x)
 
         let bounceCount = game.ball.bounceCount
 
-        if !ballGoingRight {
+        if !ballApproaching {
             // slowly return to center
             let distanceToGoal = Float(Display.height / 2) - position.y
             let movement = clampToRange(n: distanceToGoal, range: (-speed / 2, speed / 2))
             moveWithCollisions(goal: position + Vector(x: 0, y: movement))
             return
         }
+
         if bounceCount == 0 || bounceCount != lastBounceCount {
             lastBounceCount = bounceCount
             let randomAngleError = Float.random(in: -GameConstants.cpuAngleError...GameConstants.cpuAngleError)
