@@ -13,6 +13,9 @@ enum GameConstants {
 
     /// When predicting the path of the ball, the CPU adds a random error within the range of `[-n, n]`.
     static let cpuAngleError = degreesToRadians(6)
+
+    /// When predicting the path of the ball, the CPU amy misjudge the speed by up to n%
+    static let cpuSpeedError: Float = 0.1
 }
 
 // MARK: - Game
@@ -239,14 +242,14 @@ class Ball: Sprite.Sprite {
         Graphics.fillEllipse(in: bounds)
     }
 
-    func interceptX(x: Int, angleError: Float) -> Int {
+    func interceptX(x: Int, angleError: Float, speedError: Float) -> Int {
         let deltaX = abs(Float(x) - position.x)
 
         let bearing = vectorToRadians(velocity) + angleError
 
         let slope = radiansToUnitVector(bearing)
 
-        let timeToIntercept = deltaX / slope.x
+        let timeToIntercept: Float = (deltaX / slope.x) * (1 + speedError)
 
         let yAxisIntercept = Int(position.y + slope.y * timeToIntercept)
 
@@ -291,8 +294,9 @@ class ComputerPaddle: Paddle {
         if bounceCount == 0 || bounceCount != lastBounceCount {
             lastBounceCount = bounceCount
             let randomAngleError = Float.random(in: -GameConstants.cpuAngleError...GameConstants.cpuAngleError)
-//            System.log("Adding error of \(radiansToDegrees(radians: randomAngleError)) degrees")
-            targetInterceptY = game.ball.interceptX(x: Int(position.x), angleError: randomAngleError)
+            let randomSpeedError = Float.random(in: -GameConstants.cpuSpeedError...GameConstants.cpuSpeedError)
+//            System.log("Adding errors: \(radiansToDegrees(randomAngleError)) degrees, \(randomSpeedError) speed")
+            targetInterceptY = game.ball.interceptX(x: Int(position.x), angleError: randomAngleError, speedError: randomSpeedError)
         }
 
         let distanceToGoal = Float(targetInterceptY) - position.y
